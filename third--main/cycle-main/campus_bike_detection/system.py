@@ -34,6 +34,7 @@ class BikeDetectionSystem:
             iou_thresh=0.25,
             max_misses=150,             # much longer survival (5 sec @ 30fps)
             confirm_hits=3,             
+            tentative_miss_tolerance=3, # avoid tentative ID reset on short occlusion
             reid_frames=180,            # even longer Re-ID window (6 sec)
             reid_center_thresh=0.30,    # more relaxed Re-ID threshold
             max_area_ratio=5.0,         # allow more size variation
