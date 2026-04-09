@@ -39,17 +39,55 @@ def _hungarian_match(cost):
     if n == 0 or m == 0:
         return []
     if n <= 8 and m <= 8:
-        used_r = set()
-        used_c = set()
-        pairs = []
-        for idx in np.argsort(cost, axis=None):
-            r, c = divmod(int(idx), m)
-            if r not in used_r and c not in used_c:
-                pairs.append((r, c))
-                used_r.add(r); used_c.add(c)
-                if len(pairs) == min(n, m):
-                    break
-        return pairs
+        # Exact minimum-cost assignment via DP (bitmask) to avoid
+        # greedy mismatches that cause ID switches under occlusion.
+        # We always assign the smaller dimension onto the larger one.
+        if n <= m:
+            rows, cols = n, m
+            transposed = False
+            work = cost
+        else:
+            rows, cols = m, n
+            transposed = True
+            work = cost.T
+
+        size = 1 << cols
+        inf = float("inf")
+        dp = [inf] * size
+        parent = [(-1, -1)] * size  # (prev_mask, chosen_col)
+        dp[0] = 0.0
+
+        for r in range(rows):
+            new_dp = [inf] * size
+            new_parent = [(-1, -1)] * size
+            for mask in range(size):
+                if dp[mask] == inf:
+                    continue
+                for c in range(cols):
+                    if mask & (1 << c):
+                        continue
+                    nmask = mask | (1 << c)
+                    cand = dp[mask] + float(work[r, c])
+                    if cand < new_dp[nmask]:
+                        new_dp[nmask] = cand
+                        new_parent[nmask] = (mask, c)
+            dp, parent = new_dp, new_parent
+
+        best_mask = min(
+            (mask for mask in range(size) if mask.bit_count() == rows),
+            key=lambda mask: dp[mask],
+        )
+
+        chosen_cols = [0] * rows
+        cur = best_mask
+        for r in range(rows - 1, -1, -1):
+            prev, c = parent[cur]
+            chosen_cols[r] = c
+            cur = prev
+
+        if not transposed:
+            return [(r, c) for r, c in enumerate(chosen_cols)]
+        return [(c, r) for r, c in enumerate(chosen_cols)]
     from scipy.optimize import linear_sum_assignment
     r, c = linear_sum_assignment(cost)
     return list(zip(r.tolist(), c.tolist()))
@@ -91,7 +129,7 @@ class _DeadRecord:
     bbox: Tuple[float, float, float, float]
     traj: List[Tuple[float, float]]
     died_at_frame: int
-    was_confirmed: bool = False  # Track if this ID was confirmed before death
+    was_confirmed: bool = False  # confirmed or near-confirmed before death
     gmc_dx: float = 0.0
     gmc_dy: float = 0.0
 
@@ -113,6 +151,7 @@ class BikeTracker:
         max_center_step: float = 0.35,
         max_area_ratio: float = 6.0,   # relaxed: partial occlusion changes bbox size a lot
         confirm_hits: int = 3,         # frames a new track must be seen before confirmed
+        tentative_miss_tolerance: int = 2,  # keep tentative IDs alive for brief occlusion
         reid_frames: int = 90,
         reid_center_thresh: float = 0.25,
     ) -> None:
@@ -121,6 +160,7 @@ class BikeTracker:
         self.max_center_step = max_center_step
         self.max_area_ratio = max_area_ratio
         self.confirm_hits = confirm_hits
+        self.tentative_miss_tolerance = max(1, tentative_miss_tolerance)
         self.reid_frames = reid_frames
         self.reid_center_thresh = reid_center_thresh
         self.next_id = 1
@@ -188,12 +228,13 @@ class BikeTracker:
                 continue
             state = self.states[tid]
             state.misses += 1
-            # Tentative tracks that miss immediately are dropped right away
-            if not state.confirmed and state.misses >= 1:
+            # Keep tentative tracks for a short window to handle
+            # one/two-frame detector drop under partial occlusion.
+            if not state.confirmed and state.misses > self.tentative_miss_tolerance:
                 self._dead.append(_DeadRecord(
                     tid=tid, bbox=state.bbox,
                     traj=list(state.traj), died_at_frame=self._frame_idx,
-                    was_confirmed=False,
+                    was_confirmed=state.hits >= max(2, self.confirm_hits - 1),
                 ))
                 del self.states[tid]
             elif state.misses > self.max_misses:
