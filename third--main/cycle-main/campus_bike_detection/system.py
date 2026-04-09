@@ -78,6 +78,7 @@ class BikeDetectionSystem:
             h, w = frame.shape[:2]
             moving_tracks = [
                 t for t in tracks
+                if t.confirmed
                 if t.confidence == 0.0  # ghost frames always pass (already tracked)
                 or self.motion.is_moving(t.bbox, (h, w))
             ]
