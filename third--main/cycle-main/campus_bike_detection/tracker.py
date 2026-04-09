@@ -234,6 +234,7 @@ class BikeTracker:
                 track_id=tid,
                 bbox=state.bbox,
                 confidence=det.confidence,
+                confirmed=state.confirmed,
                 trajectory=state.traj,
             ))
         return result

@@ -16,6 +16,7 @@ class Track:
     track_id: int
     bbox: Tuple[float, float, float, float]
     confidence: float
+    confirmed: bool = False
     trajectory: List[Tuple[float, float]] = field(default_factory=list)
 
 
